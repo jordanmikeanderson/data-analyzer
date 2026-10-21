@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data Analyzer</title>
+  <meta name="description" content="Clean a CSV file, measure how two columns relate, and find the rows that don't fit the pattern. Runs entirely in your browser.">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="css/app.css?v=1.0.0">
+  <script>if (window.self !== window.top) document.documentElement.classList.add('embedded');</script>
+</head>
+<body>
+<div class="window" id="app">
+  <div class="titlebar"><img src="icon.png" alt="" width="16" height="16"><span>Data Analyzer</span></div>
+
+  <div class="toolbar" role="toolbar" aria-label="File">
+    <button id="openBtn" type="button">Open CSV…</button>
+    <input id="fileInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" hidden>
+    <button id="sampleBtn" type="button">Try sample data</button>
+    <span class="toolbar-sep" aria-hidden="true"></span>
+    <span id="fileLabel" class="file-label">No file open</span>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Steps">
+    <button type="button" role="tab" id="tab-clean" data-tab="clean" aria-controls="panel-clean" aria-selected="false" tabindex="-1">1. Clean</button>
+    <button type="button" role="tab" id="tab-analyze" data-tab="analyze" aria-controls="panel-analyze" aria-selected="true">2. Analyze</button>
+    <button type="button" role="tab" id="tab-about" data-tab="about" aria-controls="panel-about" aria-selected="false" tabindex="-1">About</button>
+  </div>
+
+  <div class="tab-frame">
+    <!-- ============ 1. CLEAN ============ -->
+    <section id="panel-clean" role="tabpanel" aria-labelledby="tab-clean" hidden>
+      <div class="welcome" data-when="nodata">
+        <img src="icon.png" alt="">
+        <div>
+          <h2>Clean up a spreadsheet before you analyze it</h2>
+          <p>Pick the columns you need, drop incomplete rows, filter, flag unusual values and shrink big files to a random sample. Every step is logged, and your original file is never changed.</p>
+          <div class="btn-row"><button type="button" class="primary" data-action="open">Open CSV…</button><button type="button" data-action="sample">Try sample data</button><button type="button" class="link" data-action="about">How does it work?</button></div>
+        </div>
+      </div>
+
+      <div class="clean-layout" data-when="data">
+        <div class="stack">
+          <fieldset>
+            <legend>Quick start</legend>
+            <div class="btn-row tight">
+              <button type="button" id="presetReduce" title="Keep every column, randomly keep 1,000 rows">Shrink to 1,000 rows</button>
+              <button type="button" id="presetClean" title="Keep useful columns, drop rows missing key numbers, sample big files">Clean for analysis</button>
+              <button type="button" id="presetReset">Start over</button>
+            </div>
+            <p class="hint" style="margin:6px 0 0">Changes apply right away. Your original file is never changed.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Columns to keep</legend>
+            <input id="colSearch" type="search" placeholder="Search columns" aria-label="Search columns">
+            <div class="btn-row tight" style="margin:6px 0">
+              <button type="button" id="colAll">All</button>
+              <button type="button" id="colNone">None</button>
+              <button type="button" id="colSmart" title="Skips ID columns, mostly-empty columns and long text">Suggested</button>
+              <button type="button" id="colNumeric">Numbers only</button>
+            </div>
+            <div id="colList" class="listbox sunken" role="group" aria-label="Columns to keep"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Required columns</legend>
+            <p class="hint">Rows with a blank in any checked column are removed.</p>
+            <div class="btn-row tight" style="margin-bottom:6px">
+              <button type="button" id="reqSuggest">Suggest</button>
+              <button type="button" id="reqClear">Clear</button>
+            </div>
+            <div id="reqList" class="listbox short sunken" role="group" aria-label="Required columns"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Row filters</legend>
+            <p class="hint">Keep only rows that match, like a city, a status or a date range.</p>
+            <div class="form-grid">
+              <label>Column<select id="fCol"></select></label>
+              <label>Rule<select id="fOp"></select></label>
+              <label>Value<input id="fVal" type="text" list="fValues" autocomplete="off"></label>
+              <label>And<input id="fVal2" type="text" autocomplete="off"></label>
+            </div>
+            <datalist id="fValues"></datalist>
+            <button type="button" id="fAdd">Add filter</button>
+            <div id="fList" class="rule-list"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Allowed ranges</legend>
+            <p class="hint">Business rules, like "amount above zero" or "built after 1900".</p>
+            <div class="form-grid">
+              <label>Number column<select id="rCol"></select></label>
+              <label>Keep rows<select id="rMode"><option value="inside">inside the range</option><option value="outside">outside the range</option></select></label>
+              <label>Minimum<input id="rMin" type="text" inputmode="decimal" placeholder="optional" autocomplete="off"></label>
+              <label>Maximum<input id="rMax" type="text" inputmode="decimal" placeholder="optional" autocomplete="off"></label>
+            </div>
+            <button type="button" id="rAdd">Add range</button>
+            <div id="rList" class="rule-list"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Unusual values (outliers)</legend>
+            <div class="form-grid">
+              <label>Number column<select id="oCol"></select></label>
+              <label>Action<select id="oMode">
+                <option value="none">Do nothing</option>
+                <option value="flag-iqr">Flag (IQR method)</option>
+                <option value="remove-iqr">Remove (IQR method)</option>
+                <option value="flag-pct">Flag top/bottom %</option>
+                <option value="remove-pct">Remove top/bottom %</option>
+              </select></label>
+              <label>IQR multiplier<input id="oIqr" type="number" min="0.5" max="10" step="0.5" value="1.5"></label>
+              <label>Top/bottom %<input id="oPct" type="number" min="0.1" max="49" step="0.5" value="1"></label>
+            </div>
+            <p class="hint" style="margin:0">Flagging adds a TRUE/FALSE column and keeps the rows. It's safer than removing them.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Random sample</legend>
+            <div class="form-grid">
+              <label>Rows to keep<select id="sMode">
+                <option value="all">All rows</option>
+                <option value="500">500</option>
+                <option value="1000">1,000</option>
+                <option value="5000">5,000</option>
+                <option value="10000">10,000</option>
+                <option value="custom">Custom…</option>
+              </select></label>
+              <label>Custom size<input id="sCustom" type="number" min="1" step="1" placeholder="e.g. 2500" disabled></label>
+            </div>
+            <button type="button" id="sReshuffle" title="Pick a different random set of rows">New random sample</button>
+          </fieldset>
+        </div>
+
+        <div class="stack">
+          <div class="stat-strip">
+            <div class="stat"><span>Rows in file</span><b id="cOrigRows">—</b></div>
+            <div class="stat"><span>Rows now</span><b id="cRows">—</b></div>
+            <div class="stat"><span>Columns</span><b id="cCols">—</b></div>
+            <div class="stat"><span>Blank cells</span><b id="cMissing">—</b></div>
+            <div class="stat"><span>Rows removed</span><b id="cRemoved">—</b></div>
+          </div>
+          <div id="cWarn" class="notice" hidden></div>
+          <div class="btn-row">
+            <button type="button" id="dlClean" class="primary">Download cleaned CSV</button>
+            <button type="button" id="dlLog">Download cleaning log</button>
+            <button type="button" id="copyRecipe">Copy log</button>
+            <span class="spacer"></span>
+            <button type="button" data-action="analyze">Analyze this data →</button>
+          </div>
+          <fieldset>
+            <legend>Preview</legend>
+            <div id="cPreview" class="table-wrap tall sunken"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Cleaning steps</legend>
+            <div id="cLog" class="table-wrap sunken"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Column check</legend>
+            <div id="cQuality" class="table-wrap sunken"></div>
+          </fieldset>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 2. ANALYZE ============ -->
+    <section id="panel-analyze" role="tabpanel" aria-labelledby="tab-analyze">
+      <div class="welcome" data-when="nodata">
+        <img src="icon.png" alt="">
+        <div>
+          <h2>Find out how two numbers move together</h2>
+          <p>Open a CSV file, pick a column you want to explain (Y) and one that might drive it (X). Data Analyzer draws the chart, fits a trend line, tells you in plain English how strong the link is, and lists the rows that don't fit the pattern.</p>
+          <p>Your file is read on this computer and is never uploaded.</p>
+          <div class="btn-row"><button type="button" class="primary" data-action="open">Open CSV…</button><button type="button" data-action="sample">Try sample data</button><button type="button" class="link" data-action="about">How does it work?</button></div>
+        </div>
+      </div>
+
+      <div data-when="data">
+        <div class="analyze-controls">
+          <label>Y: what you want to explain<select id="ySel"></select></label>
+          <label>X: what might drive it<select id="xSel"></select></label>
+          <label>Color dots by<select id="colorSel"></select></label>
+          <label>Compare groups by<select id="groupSel"></select></label>
+        </div>
+        <div class="analyze-options">
+          <label class="check"><input type="checkbox" id="optLine" checked> Trend line</label>
+          <label>Confidence band <select id="optBand"><option value="0">Off</option><option value="0.9">90%</option><option value="0.95" selected>95%</option><option value="0.99">99%</option></select></label>
+          <label class="check"><input type="checkbox" id="optLabels" checked> Label unusual rows</label>
+          <label>View <select id="optView"><option value="scatter">Scatter plot</option><option value="resid">Leftovers (residuals)</option></select></label>
+          <span class="spacer"></span>
+          <div class="btn-row tight">
+            <button type="button" id="swapBtn" title="Swap X and Y">Swap X/Y</button>
+            <button type="button" id="copyBtn">Copy results</button>
+            <button type="button" id="pngBtn">Save chart</button>
+          </div>
+        </div>
+        <div id="anNote" class="data-note" role="status"></div>
+
+        <div class="analyze-main">
+          <div id="chartBox" class="chart-box sunken">
+            <svg id="chart" role="img" aria-label="Scatter plot"></svg>
+            <div id="tip" class="tip" hidden></div>
+          </div>
+          <div class="stack">
+            <fieldset><legend>In plain English</legend><div id="verdict" class="verdict"></div></fieldset>
+            <fieldset><legend>Regression results</legend><div id="statsBox"></div></fieldset>
+          </div>
+        </div>
+
+        <div class="analyze-tables">
+          <fieldset class="wide">
+            <legend>Rows to investigate</legend>
+            <p id="invNote" class="hint"></p>
+            <div id="invTable" class="table-wrap sunken"></div>
+            <div class="btn-row tight" style="margin-top:7px">
+              <button type="button" id="dlFlagged">Download these rows</button>
+              <button type="button" id="dlAll" title="Every row with its predicted value, difference and standard residual">Download all rows + predictions</button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Strongest links to Y</legend>
+            <p class="hint">Every number column compared with Y. Click a row to plot it.</p>
+            <div id="rankTable" class="table-wrap sunken"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Group comparison</legend>
+            <p id="groupNote" class="hint">Pick a column in "Compare groups by" to see averages per group.</p>
+            <div id="groupTable" class="table-wrap sunken"></div>
+          </fieldset>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ABOUT ============ -->
+    <section id="panel-about" role="tabpanel" aria-labelledby="tab-about" hidden>
+      <div class="about">
+        <h2>About Data Analyzer</h2>
+        <p>Data Analyzer measures how two columns in a spreadsheet move together. Load a CSV file, tidy it up, and pick two number columns. It draws the chart, fits a straight trend line, explains the result in plain English, and points out the rows that don't fit the pattern.</p>
+        <p>Everything happens in your browser. Your file is never uploaded, and closing the window clears it.</p>
+
+        <h3>How to use it</h3>
+        <ol>
+          <li><b>Open a file.</b> Click <i>Open CSV…</i> or drag a file onto the window. No file handy? Click <i>Try sample data</i> for 1,000 Utah homes.</li>
+          <li><b>Clean (optional).</b> On the <i>1. Clean</i> tab, keep the columns you need, drop rows with blanks, add filters, flag unusual values or shrink a big file to a random sample. <i>Download cleaned CSV</i> saves the result, and the cleaning log records every step.</li>
+          <li><b>Analyze.</b> On the <i>2. Analyze</i> tab, pick <b>Y</b> (what you want to explain, like price) and <b>X</b> (what might drive it, like square footage). Not sure which X? The <i>Strongest links to Y</i> table ranks every number column. Click one to plot it.</li>
+          <li><b>Read the results.</b> Start with <i>In plain English</i>. Then check <i>Rows to investigate</i> for the points furthest from the line. You can download them, copy the results or save the chart as a picture.</li>
+        </ol>
+
+        <h3>Ways to use it</h3>
+        <ul>
+          <li><b>Accounting and audit:</b> set an expectation (for example, expenses vs. revenue across months or locations) and look into the items that miss it by the most. This is the idea behind analytical procedures.</li>
+          <li><b>Real estate:</b> see how price tracks size, age or lot size, and which properties look high or low for their size.</li>
+          <li><b>Business:</b> sales vs. ad spend, hours vs. output, cost vs. volume, and which store or month breaks the pattern.</li>
+          <li><b>Data prep:</b> cut a huge export down to a sample Excel can open, with a written log of what was removed and why.</li>
+        </ul>
+
+        <h3>What the numbers mean</h3>
+        <dl>
+          <dt>Trend line</dt><dd>The straight line that fits the dots best. "Best" means the total of the squared misses is as small as possible (least squares).</dd>
+          <dt>Slope</dt><dd>How much Y changes, on average, when X goes up by 1.</dd>
+          <dt>Intercept</dt><dd>Where the line crosses X = 0. Often not meaningful on its own (a 0 sq ft house, for example).</dd>
+          <dt>R²</dt><dd>The share of the ups and downs in Y that the line accounts for, from 0% to 100%.</dd>
+          <dt>Correlation (r)</dt><dd>Strength and direction, from −1 to +1. Near 0 means no straight-line relationship.</dd>
+          <dt>p-value</dt><dd>If there were really no relationship, how often a slope this far from zero would show up just by chance. Under 0.05 is the usual cutoff for "unlikely to be chance".</dd>
+          <dt>Std. error of estimate</dt><dd>The typical distance between a dot and the line, in Y's units.</dd>
+          <dt>Confidence band</dt><dd>The shaded area where the true trend line most likely sits. Individual dots can fall well outside it.</dd>
+          <dt>Std. residual</dt><dd>How far a row sits from the line, measured in standard errors. Beyond ±2 is unusual (about 1 row in 20 by chance alone), and beyond ±3 is very unusual.</dd>
+          <dt>Leftovers view</dt><dd>Each row's miss plotted against X. A good fit looks like a random cloud around zero. Curves or funnel shapes mean a straight line isn't the whole story.</dd>
+        </dl>
+
+        <h3>Good to know</h3>
+        <ul>
+          <li>It compares one X with one Y using a straight line. Curved relationships, several drivers at once, or trends over time need more advanced tools.</li>
+          <li>A strong pattern isn't proof that one thing causes the other.</li>
+          <li>Values like <code>$1,250.00</code>, <code>(500)</code> and <code>12%</code> are read as numbers. Dates are read as YYYY-MM-DD or M/D/YYYY.</li>
+          <li>Row numbers match Excel: row 1 is the header, so the first data row is row 2.</li>
+          <li>The chart shows up to 5,000 dots so it stays fast. The math always uses every row.</li>
+          <li>Very large files (hundreds of MB) can be slow. Use <i>Random sample</i> on the Clean tab to speed things up.</li>
+        </ul>
+
+        <div class="credits">
+          <p>Made by Jordan Anderson. It started as a scatter-plot lab in a Master of Accounting analytics class. I rebuilt it into a full tool with help from AI coding tools.</p>
+          <p>Sample data: Utah Housing Unit Inventory, State of Utah (SGID). 1,000 randomly chosen single-family homes in Davis, Salt Lake and Weber counties. Values come from county assessor records.</p>
+          <p>Charts are drawn with the open-source D3 library. Version 1.0, October 2026.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="statusbar">
+    <div id="statusMain" class="status-cell grow">Ready</div>
+    <div id="statusRows" class="status-cell" hidden></div>
+    <div class="status-cell">Your data stays on this computer</div>
+  </div>
+
+  <div id="dropOverlay" class="drop-overlay" hidden><div>Drop a CSV file to open it</div></div>
+</div>
+
+<div id="msgOverlay" class="overlay" hidden>
+  <div class="msgbox" role="alertdialog" aria-modal="true" aria-labelledby="msgTitle" aria-describedby="msgText">
+    <div class="titlebar"><span id="msgTitle">Data Analyzer</span></div>
+    <div class="body"><div id="msgIcon" class="icon">!</div><div id="msgText"></div></div>
+    <div class="actions"><button type="button" id="msgOk" class="primary">OK</button></div>
+  </div>
+</div>
+
+<script src="vendor/d3.min.js?v=7.9.0"></script>
+<script src="js/stats.js?v=1.0.0"></script>
+<script src="js/app.js?v=1.0.0"></script>
+</body>
+</html>
