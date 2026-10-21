@@ -11,56 +11,23 @@
   const MAX_POINTS = 5000;                   // most dots drawn on the chart (the math uses all rows)
   const MAX_RANK_COLUMNS = 80;
   const SAMPLE_NAME = 'utah-housing-sample.csv';
-  const MISSING = new Set(['', 'na', 'n/a', 'null', 'nan', 'none', '#n/a', '-', '--', 'undefined', 'missing', '.']);
-  const ID_NAME = /(^|[_\s.-])(id|uuid|guid|objectid|fid|key)([_\s.-]|$)/i;
+  const { isMissing, toNumber, parseDate, csvCell, detectFileStyle, decodeBytes } = Parse;
+  const fileStyle = Parse.style;
+  const ID_NAME = /(^|[_\s.-])(id|uuid|guid|objectid|fid)([_\s.-]|$)/i;
   const DATE_NAME = /(date|time|created|updated|posted|period|day)/i;
   const Y_HINT = /(value|price|amount|total|revenue|sales|cost|income|spend|salary|balance|profit|expense|score|mass|weight)/i;
   const TYPE_LABEL = { numeric: 'number', category: 'category', date: 'date', text: 'text', identifier: 'ID', sparse: 'mostly blank' };
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const isMissing = (v) => v === null || v === undefined || MISSING.has(String(v).trim().toLowerCase());
-
-  // Reads "1,234", "$1,234.50", "(500)", "12%", "1 000", "123-" as numbers.
-  function toNumber(v) {
-    if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
-    if (isMissing(v)) return NaN;
-    let s = String(v).trim();
-    let neg = false;
-    if (s.length > 2 && s[0] === '(' && s[s.length - 1] === ')') { neg = true; s = s.slice(1, -1); }
-    s = s.replace(/[$€£¥,%\s]/g, '');
-    if (s.length > 1 && s.endsWith('-') && /^\d/.test(s)) { neg = !neg; s = s.slice(0, -1); }
-    if (!/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(s)) return NaN;
-    const n = Number(s);
-    return Number.isFinite(n) ? (neg ? -n : n) : NaN;
-  }
-
-  // Dates: YYYY-MM-DD (optionally with a time), M/D/YYYY, or text like "Jan 5 2026".
-  function parseDate(v) {
-    if (isMissing(v)) return null;
-    const s = String(v).trim();
-    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
-    if (m) return validDate(+m[1], +m[2], +m[3]);
-    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
-    if (m) { let y = +m[3]; if (m[3].length === 2) y += y < 50 ? 2000 : 1900; return validDate(y, +m[1], +m[2]); }
-    if (/[A-Za-z]{3,}/.test(s) && /\d/.test(s) && s.length < 40) {
-      const d = new Date(s);
-      return Number.isNaN(d.getTime()) ? null : d;
-    }
-    return null;
-  }
-  function validDate(y, mo, d) {
-    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-    const dt = new Date(y, mo - 1, d);
-    return dt.getMonth() === mo - 1 ? dt : null;
-  }
-
   function fmt(v) {
     if (v === null || v === undefined || !Number.isFinite(v)) return '—';
     const a = Math.abs(v);
-    if (a !== 0 && (a < 1e-4 || a >= 1e15)) return v.toExponential(3);
+    if (a !== 0 && (a < 1e-6 || a >= 1e15)) return v.toExponential(3);
+    if (a !== 0 && a < 1) return v.toLocaleString('en-US', { maximumSignificantDigits: 4 });
     const digits = a >= 100000 ? 0 : a >= 1000 ? 2 : a >= 10 ? 3 : 4;
     return v.toLocaleString('en-US', { maximumFractionDigits: digits });
   }
+  const fmtZ = (z) => (Number.isFinite(z) ? z.toFixed(2) : z > 0 ? 'very high' : 'very low');
   const fmtInt = (v) => (Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '—');
   const fmtP = (p) => (!Number.isFinite(p) ? '—' : p < 0.0001 ? '< 0.0001' : p.toFixed(4));
   const pct = (x, d = 1) => (Number.isFinite(x) ? (x * 100).toFixed(d) + '%' : '—');
@@ -92,11 +59,6 @@
     return Array.from(idx.subarray(0, k)).sort((a, b) => a - b).map((i) => rows[i]);
   }
 
-  function csvCell(v) {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    return /[",\r\n]/.test(s) || /^\s|\s$/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }
   const toCsv = (header, lines) => [header, ...lines].map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
   function safeBase(name) { return (name || 'data').replace(/\.(csv|tsv|txt)$/i, '').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'data'; }
   function downloadBlob(blob, filename) {
@@ -156,16 +118,23 @@
     el.textContent = text;
     el.classList.toggle('bad', bad);
   }
-  let msgReturnFocus = null;
-  function msgBox(text, kind = 'error') {
+  let msgReturnFocus = null, msgResolve = null;
+  function msgBox(text, kind = 'error', withCancel = false) {
     $('msgText').textContent = text;
-    $('msgIcon').textContent = kind === 'error' ? '!' : 'i';
+    $('msgIcon').textContent = kind === 'error' ? '!' : kind === 'question' ? '?' : 'i';
     $('msgIcon').className = 'icon' + (kind === 'error' ? '' : ' info');
+    $('msgCancel').hidden = !withCancel;
     msgReturnFocus = document.activeElement;
     $('msgOverlay').hidden = false;
     $('msgOk').focus();
+    return new Promise((resolve) => { msgResolve = resolve; });
   }
-  function closeMsg() { $('msgOverlay').hidden = true; if (msgReturnFocus && msgReturnFocus.focus) msgReturnFocus.focus(); }
+  const confirmBox = (text) => msgBox(text, 'question', true);
+  function closeMsg(ok = true) {
+    $('msgOverlay').hidden = true;
+    if (msgReturnFocus && msgReturnFocus.focus) msgReturnFocus.focus();
+    if (msgResolve) { const r = msgResolve; msgResolve = null; r(ok); }
+  }
 
   // ---------------------------------------------------------------- loading
   function detectDelimiter(text) {
@@ -187,11 +156,12 @@
       return;
     }
     const mb = file.size / 1048576;
-    if (mb > 400) { msgBox(`This file is ${mb.toFixed(0)} MB, which is more than a browser tab can comfortably hold. Try splitting it or exporting fewer columns.`); return; }
-    setBusy(true, `Reading ${file.name} (${mb.toFixed(1)} MB)…`);
+    if (mb > 250) { msgBox(`This file is ${mb.toFixed(0)} MB, which is more than a browser tab can comfortably hold. Try exporting fewer rows or columns, or splitting it.`); return; }
+    setBusy(true, `Reading ${file.name} (${mb.toFixed(1)} MB)${mb > 50 ? '. Big files can take a minute' : ''}…`);
     try {
-      const text = await file.text();
-      if (!(await loadText(text, file.name))) setStatus(state.fileName ? `Still showing ${state.fileName}.` : 'Ready');
+      await nextFrame();
+      const { text, encoding } = decodeBytes(await file.arrayBuffer());
+      if (!(await loadText(text, file.name, encoding))) setStatus(state.fileName ? `Still showing ${state.fileName}.` : 'Ready');
     } catch (e) {
       console.error(e);
       msgBox('Could not read that file. ' + (e && e.message ? e.message : ''));
@@ -222,7 +192,7 @@
     if (text) setStatus(text);
   }
 
-  async function loadText(text, name) {
+  async function loadText(text, name, encoding = 'UTF-8') {
     await nextFrame();
     text = String(text).replace(/^﻿/, '');
     if (!text.trim()) { msgBox(`"${name}" is empty.`); return false; }
@@ -255,13 +225,14 @@
       for (const v of r) if (v && v.trim() !== '') { blank = false; break; }
       if (blank) continue;
       if (r.length !== parsed[0].length) ragged++;
-      const o = {};
+      const o = Object.create(null);
       for (let j = 0; j < width; j++) o[columns[j]] = r[j] ?? '';
       o[ROW] = i + 1;
       rows.push(o);
     }
     if (!rows.length) { msgBox(`"${name}" has column headers but no data rows.`); return false; }
     if (big) { setStatus(`Checking ${plural(columns.length, 'column')}…`); await nextFrame(); }
+    detectFileStyle(parsed, delim);
 
     state.fileName = name;
     state.raw = { columns, rows };
@@ -283,6 +254,9 @@
     const huge = rows.length > 50000;
     let msg = `Opened ${name}: ${plural(rows.length, 'row')}, ${plural(columns.length, 'column')}.`;
     if (delim !== ',') msg += ` Separated by ${delim === '\t' ? 'tabs' : `"${delim}"`}.`;
+    if (encoding === 'Windows-1252') msg += ' Read as Windows text (not UTF-8).';
+    if (fileStyle.decimalComma) msg += ' Numbers use a decimal comma.';
+    if (fileStyle.dayFirst) msg += ' Dates read as day/month/year.';
     if (ragged) msg += ` ${plural(ragged, 'row')} had a different number of cells than the header.`;
     if (huge) msg += ' Big file: a random sample on the Clean tab will make things faster.';
     setStatus(msg);
@@ -292,19 +266,18 @@
 
   // Figure out what kind of data each column holds.
   function profileColumns(rows, columns) {
-    const out = {};
+    const out = Object.create(null);
     for (const col of columns) {
       let missing = 0, nonMissing = 0, numeric = 0, dateChecked = 0, dateHits = 0, totalLen = 0, capped = false;
       const uniq = new Set();
       for (const r of rows) {
         const v = r[col];
-        if (isMissing(v)) { missing++; continue; }
+        if (v === '' || isMissing(v)) { missing++; continue; }
         nonMissing++;
-        const s = String(v).trim();
-        totalLen += s.length;
-        if (!capped) { uniq.add(s); if (uniq.size > 5000) capped = true; }
-        if (Number.isFinite(toNumber(s))) numeric++;
-        if (dateChecked < 500) { dateChecked++; if (parseDate(s)) dateHits++; }
+        totalLen += v.length;
+        if (!capped) { uniq.add(v); if (uniq.size > 5000) capped = true; }
+        if (Number.isFinite(toNumber(v))) numeric++;
+        if (dateChecked < 500) { dateChecked++; if (parseDate(v)) dateHits++; }
       }
       const missingRate = rows.length ? missing / rows.length : 0;
       const numericRatio = nonMissing ? numeric / nonMissing : 0;
@@ -320,7 +293,7 @@
       else if (!capped && uniq.size <= Math.max(20, Math.min(100, nonMissing * 0.25))) type = 'category';
       else if (uniqueRatio > 0.94 && nonMissing > 30 && avgLen < 60) type = 'identifier';
       else type = 'text';
-      out[col] = { type, missing, nonMissing, missingRate, uniqueCount: uniq.size, capped, avgLen };
+      out[col] = { type, missing, nonMissing, missingRate, numericRatio, uniqueCount: uniq.size, capped, avgLen };
     }
     return out;
   }
@@ -375,7 +348,7 @@
       const a = toNumber(f.v1), b = toNumber(f.v2), lo = Math.min(a, b), hi = Math.max(a, b);
       return (r) => {
         const n = toNumber(r[f.col]);
-        if (!Number.isFinite(n)) return op === 'ne';
+        if (!Number.isFinite(n)) return false;
         switch (op) {
           case 'eq': return n === a;
           case 'ne': return n !== a;
@@ -447,6 +420,7 @@
     const step = (name, before, after, detail) => {
       const removed = before - after, share = before ? removed / before : 0;
       log.push({ name, before, after, removed, share, detail });
+      if (name === 'Random sample') return;
       if (share >= 0.5) warnings.push({ strong: true, text: `${name} removed ${pct(share)} of the remaining rows. Double-check it before you export.` });
       else if (share >= 0.25) warnings.push({ strong: false, text: `${name} removed ${pct(share)} of the remaining rows.` });
     };
@@ -455,7 +429,8 @@
       const tests = C.filters.map(buildFilter);
       const before = rows.length;
       rows = rows.filter((r) => tests.every((t) => t(r)));
-      step('Row filters', before, rows.length, C.filters.map(describeFilter).join('; '));
+      const numRule = C.filters.some((f) => ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between'].includes(f.op) || f.op.startsWith('d_'));
+      step('Row filters', before, rows.length, C.filters.map(describeFilter).join('; ') + (numRule ? ' (number and date rules also drop blank cells)' : ''));
     }
     const req = state.raw.columns.filter((c) => C.required.has(c) && C.keep.has(c));
     if (req.length) {
@@ -486,7 +461,8 @@
         while (state.raw.columns.includes(flagCol)) flagCol = `${o.col}_unusual_${k++}`;
         let count = 0;
         rows = rows.map((r) => {
-          const copy = { ...r };
+          const copy = Object.assign(Object.create(null), r);
+          copy[ROW] = r[ROW];
           const n = toNumber(r[o.col]);
           if (!Number.isFinite(n)) copy[flagCol] = '';
           else if (n < b.lower || n > b.upper) { copy[flagCol] = 'TRUE'; count++; }
@@ -499,7 +475,7 @@
       } else {
         const before = rows.length;
         rows = rows.filter((r) => { const n = toNumber(r[o.col]); return !Number.isFinite(n) || (n >= b.lower && n <= b.upper); });
-        step('Remove unusual values', before, rows.length, `${o.col} outside ${fmt(b.lower)} to ${fmt(b.upper)} (${b.how})`);
+        step('Remove unusual values', before, rows.length, `${o.col} outside ${fmt(b.lower)} to ${fmt(b.upper)} (${b.how}). Rows with a blank ${o.col} are kept.`);
       }
     }
 
@@ -608,7 +584,8 @@
     for (const r of rows) for (const c of columns) if (isMissing(r[c])) blanks++;
     $('cOrigRows').textContent = fmtInt(total);
     $('cRows').textContent = fmtInt(rows.length);
-    $('cCols').textContent = `${fmtInt(columns.length)} of ${fmtInt(state.raw.columns.length)}`;
+    const kept = columns.length - (state.out.flagCol ? 1 : 0);
+    $('cCols').textContent = `${fmtInt(kept)} of ${fmtInt(state.raw.columns.length)}${state.out.flagCol ? ' +1' : ''}`;
     $('cMissing').textContent = fmtInt(blanks);
     $('cRemoved').textContent = fmtInt(total - rows.length);
 
@@ -672,23 +649,47 @@
     return lines.join('\r\n') + '\r\n';
   }
 
-  function downloadCleaned() {
+  async function downloadCleaned() {
     const { rows, columns, warnings } = state.out;
     if (!rows.length || !columns.length) return;
-    if (warnings.some((w) => w.strong) && !confirm('Some cleaning steps removed a large share of rows. Download anyway?')) return;
+    if (warnings.some((w) => w.strong) && !(await confirmBox('Some cleaning steps removed a large share of rows (see "Check before you export"). Download anyway?'))) return;
     downloadText(toCsv(columns, rows.map((r) => columns.map((c) => r[c]))), `${safeBase(state.fileName)}_cleaned.csv`, 'text/csv');
     setStatus(`Downloaded ${plural(rows.length, 'row')} and ${plural(columns.length, 'column')}.`);
   }
 
   // ---------------------------------------------------------------- analyze
-  function numericOutColumns() { return state.out.columns.filter((c) => typeOf(c) === 'numeric'); }
+  // Number columns available for X/Y. A mostly-blank column still counts if its filled cells are numbers
+  // (cleaning may have removed the blank rows).
+  function numericOutColumns() {
+    return state.out.columns.filter((c) => {
+      const p = state.profiles[c];
+      return p && (p.type === 'numeric' || (p.type === 'sparse' && p.numericRatio >= 0.8));
+    });
+  }
+
+  // Parsed numbers for one column of the cleaned data, cached until the cleaning changes.
+  let numCache = { version: -1, cols: new Map() };
+  function numCol(col) {
+    if (numCache.version !== state.outVersion) numCache = { version: state.outVersion, cols: new Map() };
+    let arr = numCache.cols.get(col);
+    if (!arr) {
+      const rows = state.out.rows;
+      arr = new Float64Array(rows.length);
+      for (let i = 0; i < rows.length; i++) arr[i] = toNumber(rows[i][col]);
+      numCache.cols.set(col, arr);
+    }
+    return arr;
+  }
 
   function populateAnalyzeSelectors() {
     const A = state.analyze;
     const numeric = numericOutColumns();
     const others = state.out.columns.filter((c) => typeOf(c) !== 'identifier' && typeOf(c) !== 'sparse');
+    const before = [A.y, A.x];
     if (!numeric.includes(A.y)) A.y = numeric[0] || '';
     if (!numeric.includes(A.x) || (A.x === A.y && numeric.length > 1)) A.x = numeric.find((c) => c !== A.y) || numeric[0] || '';
+    const gone = before.filter((c, i) => c && c !== [A.y, A.x][i] && !numeric.includes(c));
+    if (gone.length) setStatus(`${gone.join(' and ')} ${gone.length === 1 ? 'is' : 'are'} no longer in the cleaned data, so Analyze switched to ${A.y}${A.x !== A.y ? ` vs ${A.x}` : ''}.`);
     if (A.color && !others.includes(A.color)) A.color = '';
     if (A.group && !others.includes(A.group)) A.group = '';
     const opts = (list, none) => (none ? `<option value="">${none}</option>` : '') + list.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
@@ -712,15 +713,14 @@
   function rankAgainst(y) {
     const key = `${state.outVersion}|${y}`;
     if (state.rankCache.key === key) return state.rankCache.rows;
-    const rows = state.out.rows;
-    const yv = rows.map((r) => toNumber(r[y]));
+    const yv = numCol(y);
     const result = [];
     for (const col of numericOutColumns().slice(0, MAX_RANK_COLUMNS)) {
       if (col === y) continue;
+      const xv = numCol(col);
       const xs = [], ys = [];
-      for (let i = 0; i < rows.length; i++) {
-        const xv = toNumber(rows[i][col]);
-        if (Number.isFinite(xv) && Number.isFinite(yv[i])) { xs.push(xv); ys.push(yv[i]); }
+      for (let i = 0; i < yv.length; i++) {
+        if (Number.isFinite(xv[i]) && Number.isFinite(yv[i])) { xs.push(xv[i]); ys.push(yv[i]); }
       }
       const m = Stats.correlate(xs, ys);
       if (!m.error) result.push({ col, ...m });
@@ -754,13 +754,17 @@
       noteText = 'Data Analyzer needs at least one column of numbers. Check the Columns to keep on the Clean tab.';
       note.classList.add('bad');
     } else {
-      for (const r of rows) {
-        const x = toNumber(r[A.x]), y = toNumber(r[A.y]);
-        if (Number.isFinite(x) && Number.isFinite(y)) pairs.push({ x, y, row: r });
+      const xv = numCol(A.x), yv = numCol(A.y);
+      for (let i = 0; i < rows.length; i++) {
+        if (Number.isFinite(xv[i]) && Number.isFinite(yv[i])) pairs.push({ x: xv[i], y: yv[i], row: rows[i] });
       }
       excluded = rows.length - pairs.length;
       if (excluded) noteText += ` ${plural(excluded, 'row')} skipped because X or Y is blank or not a number.`;
-      if (A.x === A.y) { model = { n: pairs.length, error: 'X and Y are the same column. Pick two different columns.' }; }
+      if (A.x === A.y) {
+        model = { n: pairs.length, error: numericOutColumns().length < 2
+          ? `This data has only one number column (${A.x}), so there's nothing to compare it with. Check "Columns to keep" on the Clean tab.`
+          : 'X and Y are the same column. Pick two different columns.' };
+      }
       else model = Stats.regress(pairs.map((p) => p.x), pairs.map((p) => p.y));
       if (model && !model.error) {
         for (const p of pairs) {
@@ -774,15 +778,15 @@
 
     const flagged = model && !model.error ? pairs.filter((p) => Math.abs(p.z) >= 2).sort((a, b) => Math.abs(b.z) - Math.abs(a.z)) : [];
     state.model = { x: A.x, y: A.y, pairs, model, excluded, flagged };
-    renderVerdict();
-    renderStats();
-    drawChart();
-    renderInvestigate();
-    renderRanking();
-    renderGroups();
     ['copyBtn', 'pngBtn', 'dlAll'].forEach((id) => { $(id).disabled = !(model && !model.error); });
     $('dlFlagged').disabled = !flagged.length;
     $('swapBtn').disabled = !A.x || !A.y || A.x === A.y;
+    for (const [fn, box] of [[renderVerdict, 'verdict'], [renderStats, 'statsBox'], [drawChart, null], [renderInvestigate, 'invTable'], [renderRanking, 'rankTable'], [renderGroups, 'groupTable']]) {
+      try { fn(); } catch (e) {
+        console.error(e);
+        if (box) $(box).innerHTML = '<div class="table-note">Something went wrong showing this part. Try a smaller sample on the Clean tab.</div>';
+      }
+    }
   }
 
   function verdictParts() {
@@ -791,10 +795,13 @@
     const strength = ar < 0.1 ? 'Almost no' : ar < 0.3 ? 'A weak' : ar < 0.5 ? 'A moderate' : ar < 0.7 ? 'A fairly strong' : 'A strong';
     const dir = ar < 0.1 ? '' : m.r > 0 ? ' positive' : ' negative';
     const sig = m.p < 0.05;
+    const pText = m.p < 0.0001 ? 'p < 0.0001' : `p = ${m.p.toFixed(4)}`;
+    let chance = sig ? `Unlikely to be chance (${pText}).` : `Could easily be chance (${pText}).`;
+    if (m.n < 10) chance = `But with only ${m.n} rows, ${sig ? 'treat it as a hint, not proof' : 'there is too little data to tell'} (${pText}).`;
     return {
       headline: `${strength}${dir} relationship.`,
-      chance: sig ? `Unlikely to be chance (p ${m.p < 0.0001 ? '< 0.0001' : '= ' + m.p.toFixed(4)}).` : `Could easily be chance (p = ${m.p.toFixed(4)}).`,
-      slope: `When ${M.x} goes up by 1, ${M.y} goes ${m.slope >= 0 ? 'up' : 'down'} by about ${fmt(Math.abs(m.slope))} on average.`,
+      chance,
+      slope: `Rows with 1 more ${M.x} have, on average, about ${fmt(Math.abs(m.slope))} ${m.slope >= 0 ? 'more' : 'less'} ${M.y}.`,
       r2: `${M.x} accounts for about ${pct(m.r2, 0)} of the ups and downs in ${M.y}.`,
     };
   }
@@ -806,12 +813,12 @@
     if (m.error) { box.innerHTML = `<p>${esc(m.error)}</p>`; return; }
     const v = verdictParts();
     const items = [
-      `When <b>${esc(M.x)}</b> goes up by 1, <b>${esc(M.y)}</b> goes ${m.slope >= 0 ? 'up' : 'down'} by about <b>${esc(fmt(Math.abs(m.slope)))}</b> on average.`,
+      `Rows with 1 more <b>${esc(M.x)}</b> have, on average, about <b>${esc(fmt(Math.abs(m.slope)))}</b> ${m.slope >= 0 ? 'more' : 'less'} <b>${esc(M.y)}</b>.`,
       `<b>${esc(M.x)}</b> accounts for about <b>${pct(m.r2, 0)}</b> of the ups and downs in <b>${esc(M.y)}</b>.`,
       `Based on ${plural(m.n, 'row')}.`,
     ];
     if (M.flagged.length) items.push(`${plural(M.flagged.length, 'row')} ${M.flagged.length === 1 ? "doesn't" : "don't"} fit the pattern well. See <i>Rows to investigate</i>.`);
-    if (m.n < 30) items.push('Small sample, so treat this as a rough guide.');
+    if (m.n >= 10 && m.n < 30) items.push('Small sample, so treat this as a rough guide.');
     box.innerHTML = `<p class="headline"><b>${esc(v.headline)}</b> ${esc(v.chance)}</p><ul>${items.map((i) => `<li>${i}</li>`).join('')}</ul><p class="fine">A pattern isn't proof that one causes the other.</p>`;
   }
 
@@ -842,12 +849,14 @@
     if (!M || !M.model || M.model.error) { note.textContent = 'Results appear once there is a trend line.'; box.innerHTML = ''; return; }
     const { flagged } = M;
     const strong = flagged.filter((p) => Math.abs(p.z) >= 3).length;
-    note.textContent = flagged.length
-      ? `${plural(flagged.length, 'row')} ${flagged.length === 1 ? 'sits' : 'sit'} more than 2 standard errors from the line${strong ? `, ${fmtInt(strong)} of them more than 3` : ''}. These are the rows to look at first. Hover a row to find it on the chart.`
-      : 'No rows sit more than 2 standard errors from the line.';
+    let text = flagged.length
+      ? `${plural(flagged.length, 'row')} ${flagged.length === 1 ? 'is' : 'are'} 2 or more standard errors off the line${strong ? ` (${fmtInt(strong)} by 3 or more)` : ''}. These are the rows to look at first. Hover one to find it on the chart.`
+      : 'No rows are 2 or more standard errors off the line.';
+    if (M.model.n < 10) text += ` With only ${M.model.n} rows, read this list with care: one odd row also pulls the line toward itself.`;
+    note.textContent = text;
     if (!flagged.length) { box.innerHTML = ''; return; }
     const show = flagged.slice(0, 100);
-    box.innerHTML = `<table><thead><tr><th class="num">Row</th><th class="num">${esc(M.x)}</th><th class="num">${esc(M.y)}</th><th class="num">Expected</th><th class="num">Difference</th><th class="num">Std. resid.</th></tr></thead><tbody>${show.map((p) => `<tr class="click" data-row="${p.row[ROW]}" title="Highlight on the chart"><td class="num">${p.row[ROW]}</td><td class="num">${fmt(p.x)}</td><td class="num">${fmt(p.y)}</td><td class="num">${fmt(p.pred)}</td><td class="num">${fmt(p.resid)}</td><td class="num">${p.z.toFixed(2)}</td></tr>`).join('')}</tbody></table>${flagged.length > 100 ? `<div class="table-note">Showing the 100 most unusual. Download to see all ${fmtInt(flagged.length)}.</div>` : ''}`;
+    box.innerHTML = `<table><thead><tr><th class="num">Row</th><th class="num">${esc(M.x)}</th><th class="num">${esc(M.y)}</th><th class="num" title="What the trend line predicts for this row">Expected</th><th class="num" title="Actual minus expected">Difference</th><th class="num" title="How unusual the row is, in standard errors">Std. resid.</th></tr></thead><tbody>${show.map((p) => `<tr class="click" data-row="${p.row[ROW]}" title="Highlight on the chart"><td class="num">${p.row[ROW]}</td><td class="num">${fmt(p.x)}</td><td class="num">${fmt(p.y)}</td><td class="num">${fmt(p.pred)}</td><td class="num">${fmt(p.resid)}</td><td class="num">${fmtZ(p.z)}</td></tr>`).join('')}</tbody></table>${flagged.length > 100 ? `<div class="table-note">Showing the 100 most unusual. Download to see all ${fmtInt(flagged.length)}.</div>` : ''}`;
   }
 
   function renderRanking() {
@@ -855,7 +864,13 @@
     if (!A.y) { box.innerHTML = ''; return; }
     const list = rankAgainst(A.y);
     if (!list.length) { box.innerHTML = '<div class="table-note">No other number columns to compare.</div>'; return; }
-    box.innerHTML = `<table><thead><tr><th>Column vs ${esc(A.y)}</th><th class="num">r</th><th class="num">R²</th><th class="num">p-value</th><th class="num">Rows</th></tr></thead><tbody>${list.slice(0, 40).map((r) => `<tr class="click${r.col === A.x ? ' current' : ''}" data-x="${esc(r.col)}" title="Plot ${esc(r.col)} as X"><td class="cut">${esc(r.col)}</td><td class="num">${r.r.toFixed(3)}</td><td class="num">${r.r2.toFixed(3)}</td><td class="num">${fmtP(r.p)}</td><td class="num">${fmtInt(r.n)}</td></tr>`).join('')}</tbody></table>`;
+    box.innerHTML = `<table><thead><tr><th>Column vs ${esc(A.y)}</th><th class="num">r</th><th class="num">R²</th><th class="num">p-value</th><th class="num">Rows</th></tr></thead><tbody>${list.slice(0, 40).map((r) => `<tr class="click${r.col === A.x ? ' current' : ''}" data-x="${esc(r.col)}" title="Plot ${esc(r.col)} as X"><td class="cut">${esc(r.col)}</td><td class="num">${r.r.toFixed(3)}</td><td class="num">${r.r2.toFixed(3)}</td><td class="num">${fmtP(r.p)}</td><td class="num">${fmtInt(r.n)}</td></tr>`).join('')}</tbody></table>${rankNote(list.length)}`;
+  }
+  function rankNote(shown) {
+    const total = numericOutColumns().filter((c) => c !== state.analyze.y).length;
+    if (total > MAX_RANK_COLUMNS) return `<div class="table-note">Compared the first ${MAX_RANK_COLUMNS} of ${fmtInt(total)} number columns. Keep fewer columns on the Clean tab to compare others.</div>`;
+    if (shown > 40) return `<div class="table-note">Showing the 40 strongest of ${fmtInt(shown)}.</div>`;
+    return '';
   }
 
   function renderGroups() {
@@ -863,13 +878,14 @@
     if (!A.group) { note.hidden = false; box.innerHTML = ''; return; }
     note.hidden = true;
     const groups = new Map();
-    for (const r of state.out.rows) {
-      const g = isMissing(r[A.group]) ? '(blank)' : String(r[A.group]).trim();
+    const rows = state.out.rows, xv = numCol(A.x), yv = numCol(A.y);
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i][A.group];
+      const g = isMissing(raw) ? '(blank)' : String(raw).trim();
       let s = groups.get(g);
       if (!s) { s = { rows: 0, xs: [], ys: [] }; groups.set(g, s); }
       s.rows++;
-      const x = toNumber(r[A.x]), y = toNumber(r[A.y]);
-      if (Number.isFinite(x) && Number.isFinite(y)) { s.xs.push(x); s.ys.push(y); }
+      if (Number.isFinite(xv[i]) && Number.isFinite(yv[i])) { s.xs.push(xv[i]); s.ys.push(yv[i]); }
     }
     const mean = (a) => (a.length ? a.reduce((t, v) => t + v, 0) / a.length : NaN);
     const list = [...groups.entries()].sort((a, b) => b[1].rows - a[1].rows);
@@ -878,9 +894,9 @@
       const m = s.xs.length >= 3 ? Stats.correlate(s.xs, s.ys) : { error: true };
       return `<tr><td class="cut" title="${esc(g)}">${esc(g)}</td><td class="num">${fmtInt(s.rows)}</td><td class="num">${fmt(mean(s.ys))}</td><td class="num">${fmt(mean(s.xs))}</td><td class="num">${m.error ? '—' : m.r.toFixed(3)}</td></tr>`;
     }).join('');
-    const allX = [], allY = [];
-    for (const [, s] of list) { allX.push(...s.xs); allY.push(...s.ys); }
-    const total = `<tr class="total"><td>All rows</td><td class="num">${fmtInt(state.out.rows.length)}</td><td class="num">${fmt(mean(allY))}</td><td class="num">${fmt(mean(allX))}</td><td class="num">${state.model.model && !state.model.model.error ? state.model.model.r.toFixed(3) : '—'}</td></tr>`;
+    let sumX = 0, sumY = 0, nAll = 0;
+    for (const [, g] of list) { for (let i = 0; i < g.xs.length; i++) { sumX += g.xs[i]; sumY += g.ys[i]; } nAll += g.xs.length; }
+    const total = `<tr class="total"><td>All rows</td><td class="num">${fmtInt(state.out.rows.length)}</td><td class="num">${fmt(nAll ? sumY / nAll : NaN)}</td><td class="num">${fmt(nAll ? sumX / nAll : NaN)}</td><td class="num">${state.model.model && !state.model.model.error ? state.model.model.r.toFixed(3) : '—'}</td></tr>`;
     box.innerHTML = `<table><thead><tr><th>${esc(A.group)}</th><th class="num">Rows</th><th class="num">Avg ${esc(A.y)}</th><th class="num">Avg ${esc(A.x)}</th><th class="num">r</th></tr></thead><tbody>${body}${total}</tbody></table>${list.length > 50 ? `<div class="table-note">Showing the 50 largest of ${fmtInt(list.length)} groups.</div>` : ''}`;
   }
 
@@ -943,7 +959,9 @@
     const { pairs, model } = M;
     const ok = model && !model.error;
     const resid = opt.view === 'resid' && ok;
-    const yOf = (p) => (resid ? p.resid : p.y);
+    // Leftovers view plots each row's standardized residual, the same number "Rows to investigate" uses.
+    const zCap = 50;
+    const yOf = (p) => (resid ? Math.max(-zCap, Math.min(zCap, p.z)) : p.y);
     const color = buildColor(pairs, A.color);
 
     // Legend layout (drawn inside the SVG so "Save chart" includes it).
@@ -972,7 +990,7 @@
 
     const xExt = d3.extent(pairs, (p) => p.x);
     let yExt = d3.extent(pairs, yOf);
-    if (resid) { const a = Math.max(Math.abs(yExt[0]), Math.abs(yExt[1]), 2.2 * model.s); yExt = [-a, a]; }
+    if (resid) { const a = Math.max(Math.abs(yExt[0]), Math.abs(yExt[1]), 2.6); yExt = [-a, a]; }
     const pad = (e) => { const d = e[1] - e[0]; const p = d ? d * 0.05 : Math.abs(e[0]) * 0.1 || 1; return [e[0] - p, e[1] + p]; };
     const xScale = d3.scaleLinear().domain(pad(xExt)).nice();
     const yScale = d3.scaleLinear().domain(pad(yExt)).nice();
@@ -998,7 +1016,7 @@
 
     svg.append('text').attr('x', mg.left + w / 2).attr('y', plotH - 8).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 'bold').text(clip(M.x, 60));
     svg.append('text').attr('transform', `translate(13,${mg.top + h / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 'bold')
-      .text(clip(resid ? `Leftover ${M.y}` : M.y, Math.max(12, Math.floor(h / 7))));
+      .text(clip(resid ? 'Std. residual' : M.y, Math.max(12, Math.floor(h / 7))));
 
     const plot = g.append('g').attr('clip-path', `url(#${clipId})`);
 
@@ -1017,7 +1035,7 @@
     }
     if (resid) {
       plot.append('line').attr('x1', 0).attr('x2', w).attr('y1', yScale(0)).attr('y2', yScale(0)).attr('stroke', '#000080').attr('stroke-width', 2);
-      for (const k of [-2, 2]) plot.append('line').attr('x1', 0).attr('x2', w).attr('y1', yScale(k * model.s)).attr('y2', yScale(k * model.s)).attr('stroke', '#a00000').attr('stroke-dasharray', '5 4');
+      for (const k of [-2, 2]) plot.append('line').attr('x1', 0).attr('x2', w).attr('y1', yScale(k)).attr('y2', yScale(k)).attr('stroke', '#a00000').attr('stroke-dasharray', '5 4');
     }
 
     // Points (at most MAX_POINTS; unusual rows are always drawn)
@@ -1065,7 +1083,7 @@
 
     // Caption
     let caption = '';
-    if (resid) caption = 'Leftovers: actual minus expected. Dashed lines = ±2 std. errors.';
+    if (resid) caption = 'Leftovers: each row\'s distance from the line, in standard errors. Outside the dashed lines = rows to investigate.';
     else if (ok && opt.line) caption = equationText(model, M.x, M.y);
     if (pairs.length > shown.length) caption += `${caption ? '   ·   ' : ''}Showing ${fmtInt(shown.length)} of ${fmtInt(pairs.length)} dots (math uses all)`;
     svg.append('text').attr('x', mg.left).attr('y', 18).attr('font-size', 12).attr('font-weight', 'bold').attr('fill', '#000080').text(clip(caption, Math.floor(W / 6.5)));
@@ -1102,7 +1120,7 @@
     const M = state.model, tip = $('tip');
     const lines = [[`Row ${p.row[ROW]}`, true], [`${M.y}: ${fmt(p.y)}`], [`${M.x}: ${fmt(p.x)}`]];
     if (state.analyze.color) lines.push([`${state.analyze.color}: ${isMissing(p.row[state.analyze.color]) ? '(blank)' : p.row[state.analyze.color]}`]);
-    if (Number.isFinite(p.pred)) { lines.push([`Expected ${M.y}: ${fmt(p.pred)}`]); lines.push([`Std. residual: ${p.z.toFixed(2)}`]); }
+    if (Number.isFinite(p.pred)) { lines.push([`Expected ${M.y}: ${fmt(p.pred)}`]); lines.push([`Std. residual: ${fmtZ(p.z)}`]); }
     tip.replaceChildren(...lines.map(([t, bold]) => { const d = document.createElement('div'); d.textContent = t; if (bold) d.style.fontWeight = 'bold'; return d; }));
     tip.hidden = false;
     moveTip(ev);
@@ -1167,8 +1185,10 @@
     if (!M || !M.model || M.model.error) return;
     const cols = state.out.columns;
     const list = onlyFlagged ? M.flagged : M.pairs;
-    const header = ['excel_row', ...cols, `expected_${M.y}`, 'difference', 'std_residual'];
-    const lines = list.map((p) => [p.row[ROW], ...cols.map((c) => p.row[c]), +p.pred.toPrecision(10), +p.resid.toPrecision(10), p.z.toFixed(3)]);
+    const used = new Set(cols.map((c) => c.toLowerCase()));
+    const fresh = (name) => { let n = name, k = 2; while (used.has(n.toLowerCase())) n = `${name}_${k++}`; used.add(n.toLowerCase()); return n; };
+    const header = [fresh('excel_row'), ...cols, fresh(`expected_${M.y}`), fresh('difference'), fresh('std_residual')];
+    const lines = list.map((p) => [p.row[ROW], ...cols.map((c) => p.row[c]), +p.pred.toPrecision(10), +p.resid.toPrecision(10), Number.isFinite(p.z) ? p.z.toFixed(3) : (p.z > 0 ? 'Infinity' : '-Infinity')]);
     const name = `${safeBase(M.y)}_vs_${safeBase(M.x)}_${onlyFlagged ? 'rows_to_investigate' : 'predictions'}.csv`;
     downloadText(toCsv(header, lines), name, 'text/csv');
     setStatus(`Downloaded ${plural(list.length, 'row')}.`);
@@ -1207,8 +1227,9 @@
       else if (a === 'sample') loadSample();
       else showTab(a);
     });
-    $('msgOk').addEventListener('click', closeMsg);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('msgOverlay').hidden) closeMsg(); });
+    $('msgOk').addEventListener('click', () => closeMsg(true));
+    $('msgCancel').addEventListener('click', () => closeMsg(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('msgOverlay').hidden) closeMsg(false); });
 
     // Tabs (click + arrow keys)
     const tabs = [...document.querySelectorAll('[role="tab"]')];

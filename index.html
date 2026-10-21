@@ -6,7 +6,7 @@
   <title>Data Analyzer</title>
   <meta name="description" content="Clean a CSV file, measure how two columns relate, and find the rows that don't fit the pattern. Runs entirely in your browser.">
   <link rel="icon" type="image/png" href="icon.png">
-  <link rel="stylesheet" href="css/app.css?v=1.0.0">
+  <link rel="stylesheet" href="css/app.css?v=1.1.0">
   <script>if (window.self !== window.top) document.documentElement.classList.add('embedded');</script>
 </head>
 <body>
@@ -267,15 +267,18 @@
           <dt>p-value</dt><dd>If there were really no relationship, how often a slope this far from zero would show up just by chance. Under 0.05 is the usual cutoff for "unlikely to be chance".</dd>
           <dt>Std. error of estimate</dt><dd>The typical distance between a dot and the line, in Y's units.</dd>
           <dt>Confidence band</dt><dd>The shaded area where the true trend line most likely sits. Individual dots can fall well outside it.</dd>
-          <dt>Std. residual</dt><dd>How far a row sits from the line, measured in standard errors. Beyond ±2 is unusual (about 1 row in 20 by chance alone), and beyond ±3 is very unusual.</dd>
-          <dt>Leftovers view</dt><dd>Each row's miss plotted against X. A good fit looks like a random cloud around zero. Curves or funnel shapes mean a straight line isn't the whole story.</dd>
+          <dt>Std. residual</dt><dd>How far a row sits from the line, in standard errors. It's measured against the line the <i>other</i> rows would draw, so one odd row can't hide by pulling the line toward itself (statisticians call this a studentized residual). Beyond ±2 is unusual, about 1 row in 20 by chance alone. Beyond ±3 is very unusual.</dd>
+          <dt>Leftovers view</dt><dd>Each row's std. residual plotted against X. A good fit looks like a random cloud around zero, and rows outside the dashed lines are the ones to investigate. Curves or funnel shapes mean a straight line isn't the whole story.</dd>
         </dl>
 
         <h3>Good to know</h3>
         <ul>
+          <li>With fewer than 10 rows, treat every result as a hint. One odd row can move the line a lot.</li>
           <li>It compares one X with one Y using a straight line. Curved relationships, several drivers at once, or trends over time need more advanced tools.</li>
           <li>A strong pattern isn't proof that one thing causes the other.</li>
-          <li>Values like <code>$1,250.00</code>, <code>(500)</code> and <code>12%</code> are read as numbers. Dates are read as YYYY-MM-DD or M/D/YYYY.</li>
+          <li>Values like <code>$1,250.00</code>, <code>(500)</code> and Excel's accounting format are read as numbers. <code>12%</code> is read as 12, not 0.12. Files that use a decimal comma (<code>1.234,50</code>) are detected automatically.</li>
+          <li>Dates are read as YYYY-MM-DD or M/D/YYYY. If a file has dates like 31/12/2026, it switches to day/month/year.</li>
+          <li>In downloads, text that starts with <code>=</code>, <code>+</code>, <code>-</code> or <code>@</code> gets a leading apostrophe so Excel won't run it as a formula.</li>
           <li>Row numbers match Excel: row 1 is the header, so the first data row is row 2.</li>
           <li>The chart shows up to 5,000 dots so it stays fast. The math always uses every row.</li>
           <li>Very large files (hundreds of MB) can be slow. Use <i>Random sample</i> on the Clean tab to speed things up.</li>
@@ -284,7 +287,7 @@
         <div class="credits">
           <p>Made by Jordan Anderson. It started as a scatter-plot lab in a Master of Accounting analytics class. I rebuilt it into a full tool with help from AI coding tools.</p>
           <p>Sample data: Utah Housing Unit Inventory, State of Utah (SGID). 1,000 randomly chosen single-family homes in Davis, Salt Lake and Weber counties. Values come from county assessor records.</p>
-          <p>Charts are drawn with the open-source D3 library. Version 1.0, October 2026.</p>
+          <p>Charts are drawn with the open-source D3 library. Version 1.1, October 2026.</p>
         </div>
       </div>
     </section>
@@ -303,12 +306,13 @@
   <div class="msgbox" role="alertdialog" aria-modal="true" aria-labelledby="msgTitle" aria-describedby="msgText">
     <div class="titlebar"><span id="msgTitle">Data Analyzer</span></div>
     <div class="body"><div id="msgIcon" class="icon">!</div><div id="msgText"></div></div>
-    <div class="actions"><button type="button" id="msgOk" class="primary">OK</button></div>
+    <div class="actions"><button type="button" id="msgOk" class="primary">OK</button><button type="button" id="msgCancel" hidden>Cancel</button></div>
   </div>
 </div>
 
 <script src="vendor/d3.min.js?v=7.9.0"></script>
-<script src="js/stats.js?v=1.0.0"></script>
-<script src="js/app.js?v=1.0.0"></script>
+<script src="js/parse.js?v=1.1.0"></script>
+<script src="js/stats.js?v=1.1.0"></script>
+<script src="js/app.js?v=1.1.0"></script>
 </body>
 </html>

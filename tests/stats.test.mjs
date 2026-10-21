@@ -38,3 +38,18 @@ test('refuses impossible cases with a plain message', () => {
   assert.match(Stats.regress([5, 5, 5], [1, 2, 3]).error, /same X/);
   assert.match(Stats.regress([1, 2, 3], [7, 7, 7]).error, /same Y/);
 });
+
+test('unusual rows: externally studentized residuals (one odd month out of five)', () => {
+  const xs = [1, 2, 3, 4, 5], ys = [7000, 7600, 30000, 8100, 8700];
+  const m = Stats.regress(xs, ys);
+  // Expected values from numpy, refitting the line without each row in turn.
+  const expected = [-0.5441692455, -0.3789057840, 126.5714285714, -0.4056033730, -0.5248648243];
+  xs.forEach((x, i) => close(m.stdResidual(x, ys[i]), expected[i], 1e-8, `row ${i + 1}`));
+});
+
+test('precision with huge but close X values (around 1e15)', () => {
+  const xs = [], ys = [];
+  for (let i = 0; i < 50; i++) { xs.push(1e15 + i * 8); ys.push(2 * i * 8 + ((i * 7) % 5)); }
+  const m = Stats.regress(xs, ys);
+  assert.ok(Math.abs(m.slope - 2) < 0.01, `slope ${m.slope}`);
+});

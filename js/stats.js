@@ -75,15 +75,16 @@ const Stats = (() => {
 
   /*
    * Ordinary least squares with one predictor.
-   * Uses centered sums (two passes) so big numbers like home values or
-   * years don't lose precision.
+   * Uses centered sums (two passes, shifted by the first value) so big numbers
+   * like home values, years or long IDs don't lose precision.
    */
   function regress(xs, ys) {
     const n = xs.length;
     if (n < 3) return { n, error: 'Need at least 3 rows that have numbers in both columns.' };
-    let mx = 0, my = 0;
-    for (let i = 0; i < n; i++) { mx += xs[i]; my += ys[i]; }
-    mx /= n; my /= n;
+    const x0 = xs[0], y0 = ys[0];
+    let sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) { sx += xs[i] - x0; sy += ys[i] - y0; }
+    const mx = x0 + sx / n, my = y0 + sy / n;
     let sxx = 0, syy = 0, sxy = 0;
     for (let i = 0; i < n; i++) {
       const dx = xs[i] - mx, dy = ys[i] - my;
@@ -111,12 +112,21 @@ const Stats = (() => {
       n, df, mx, my, sxx, syy, sxy, slope, intercept, r, r2, s, sse,
       rmse: Math.sqrt(sse / n), seSlope, seIntercept, t, p,
       predict: (x) => intercept + slope * x,
-      // Internally studentized residual: how unusual a point is, in standard errors.
+      /*
+       * Externally studentized residual: how many standard errors a row sits from the line
+       * that the OTHER rows would draw. Unlike the plain version it isn't capped at √(n−2),
+       * so one odd month among five can still stand out.
+       */
       stdResidual: (x, y) => {
         const e = y - (intercept + slope * x);
         const h = 1 / n + ((x - mx) * (x - mx)) / sxx;
         const denom = s * Math.sqrt(Math.max(1 - h, 1e-12));
-        return denom > 0 ? e / denom : 0;
+        if (!(denom > 0)) return 0;
+        const r = e / denom;                       // internally studentized
+        if (n < 4) return r;
+        const left = n - 2 - r * r;
+        if (left <= 1e-12) return r === 0 ? 0 : Math.sign(r) * Infinity;
+        return r * Math.sqrt((n - 3) / left);
       },
       // Half-width of the confidence band for the average Y at x.
       bandHalfWidth: (x, tCrit) => tCrit * s * Math.sqrt(1 / n + ((x - mx) * (x - mx)) / sxx),

@@ -21,7 +21,7 @@ Open a CSV file, clean it up, and pick two number columns. Data Analyzer draws t
 - Scatter plot with trend line and a 90/95/99% confidence band
 - Plain-English summary: how strong the link is, whether it's likely chance, what the slope means
 - Full regression output: slope, standard error, t-stat, p-value, intercept, R², correlation, standard error of estimate
-- **Rows to investigate:** the rows furthest from the line (standardized residual beyond ±2), with a download
+- **Rows to investigate:** the rows furthest from the line (studentized residual of ±2 or more, measured against the line the other rows would draw, so one odd month out of five still stands out), with a download
 - "Strongest links to Y": ranks every number column against Y; click one to plot it
 - Group comparison (averages and correlation per group), color dots by any column
 - Residual ("leftovers") view to check whether a straight line fits
@@ -35,7 +35,7 @@ Open a CSV file, clean it up, and pick two number columns. Data Analyzer draws t
 - Click **Try sample data** to load 1,000 Utah homes, or add `?sample` to the address.
 - To put it online for free, turn on GitHub Pages for this repo (Settings → Pages → deploy from the `main` branch).
 
-Accepted files: CSV (comma, semicolon, tab or pipe separated). Numbers like `$1,250.00`, `(500)` and `12%` are read as numbers. Dates are read as YYYY-MM-DD or M/D/YYYY. Row numbers match Excel (row 1 is the header).
+Accepted files: CSV (comma, semicolon, tab or pipe separated). Numbers like `$1,250.00`, `(500)` and Excel's accounting format (` $ (500.00)`, ` $ -  `) are read as numbers; `12%` is read as 12. Decimal commas (`1.234,50`) and Windows-encoded files (Excel's "CSV (Comma delimited)") are detected. Dates are read as YYYY-MM-DD or M/D/YYYY, switching to day/month/year when the file has dates like 31/12/2026. Row numbers match Excel (row 1 is the header). Downloads put an apostrophe in front of text that starts with `=`, `+`, `-` or `@`, so Excel won't run it as a formula.
 
 ## Good uses
 
@@ -46,7 +46,7 @@ Accepted files: CSV (comma, semicolon, tab or pipe separated). Numbers like `$1,
 
 ## Limits
 
-One X at a time, straight lines only (simple linear regression). A strong pattern isn't proof of cause and effect. The chart draws at most 5,000 dots so it stays fast, but the math always uses every row. Files in the hundreds of MB can be slow; tested with a 89 MB, 391,845-row file.
+One X at a time, straight lines only (simple linear regression). A strong pattern isn't proof of cause and effect. The chart draws at most 5,000 dots so it stays fast, but the math always uses every row. Big files are slower: an 89 MB, 391,845-row file takes about 15 seconds to open and needs roughly 700 MB of browser memory. The size limit is 250 MB.
 
 ## How it's built
 
@@ -59,10 +59,11 @@ js/app.js                   loading, cleaning, analysis, chart
 js/stats.js                 regression and t-distribution math (no libraries)
 vendor/d3.min.js            D3 v7.9.0 (+ its license)
 samples/                    sample data (.csv, plus a .js copy so it works offline)
-tests/stats.test.mjs        checks the math against SciPy's results
+js/parse.js                 reading numbers, dates and file encodings; safe CSV cells
+tests/                      math checked against SciPy; number/date reading checks
 ```
 
-Run the math check with Node 20 or newer (from this folder): `node --test`
+Run the checks with Node 20 or newer (from this folder): `node --test` (11 tests).
 
 When the page runs inside another page (an iframe), it hides its own title bar so it fits in a host window. That's how it appears on [jo-schmo.com](https://jo-schmo.com).
 
