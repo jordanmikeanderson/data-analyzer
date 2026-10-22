@@ -53,7 +53,7 @@ One X column at a time and straight lines only (simple linear regression). A str
 
 Plain HTML, CSS and JavaScript with no build step. The chart uses [D3](https://d3js.org) (included in `vendor/`) and the stats math is written from scratch in `js/stats.js` and checked against SciPy. Run the tests with Node 20+: `node --test`
 
-It hides its own title bar when it runs inside another page, which is how it fits into a window on my Windows 95 site.
+It hides its own title bar when it runs inside another page, which is how it fits into a window on my Windows 95 site. The drop-down lists, check boxes and scroll bars are drawn Windows 95 style (`js/win95-select.js`) instead of using the browser's own, and inside the site it borrows the site's Windows 95 font.
 
 ## Credits
 

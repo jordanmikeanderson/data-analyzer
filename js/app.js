@@ -1402,6 +1402,7 @@
 
   // Inside a window on Jordan's Windows 95 site, use the site's own Windows 95 font (it's already loaded there).
   // Only works when the page around it is on the same site and declares a "win95" font; otherwise nothing changes.
+  let retried = false;
   function borrowHostFont() {
     if (!document.documentElement.classList.contains('embedded')) return;
     let src = '';
@@ -1417,6 +1418,8 @@
         if (src) break;
       }
     } catch (e) { return; } // a page on another site
+    // The host page's stylesheets may still be loading: try again once it has loaded.
+    if (!src && !retried) { try { if (window.parent.document.readyState !== 'complete') { retried = true; window.parent.addEventListener('load', borrowHostFont, { once: true }); } } catch (e) { /* ignore */ } }
     if (!src || !window.FontFace) return;
     new FontFace('win95', `url("${src}")`).load()
       .then((face) => { document.fonts.add(face); document.documentElement.classList.add('host-font'); })
