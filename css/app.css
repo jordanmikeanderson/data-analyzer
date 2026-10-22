@@ -12,6 +12,12 @@
   --help: #ffffe1;
   --bad: #a00000;
   --font: Tahoma, "MS Sans Serif", Verdana, Geneva, "Segoe UI", sans-serif;
+  /* Pixel pictures (drawn as SVG so they stay sharp): drop-down and scroll bar arrows. */
+  --arrow-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3C/svg%3E");
+  --arrow-down-off: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' shape-rendering='crispEdges'%3E%3Cpath fill='%23fff' transform='translate(1 1)' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3Cpath fill='%23808080' d='M0 0h7v1H0zM1 1h5v1H1zM2 2h3v1H2zM3 3h1v1H3z'/%3E%3C/svg%3E");
+  --arrow-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='4' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M3 0h1v1H3zM2 1h3v1H2zM1 2h5v1H1zM0 3h7v1H0z'/%3E%3C/svg%3E");
+  --arrow-left: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='7' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M3 0h1v7H3zM2 1h1v5H2zM1 2h1v3H1zM0 3h1v1H0z'/%3E%3C/svg%3E");
+  --arrow-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='7' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M0 0h1v7H0zM1 1h1v5H1zM2 2h1v3H2zM3 3h1v1H3z'/%3E%3C/svg%3E");
   --raised: inset -1px -1px var(--dark), inset 1px 1px var(--light), inset -2px -2px var(--shadow), inset 2px 2px var(--hi);
   --pressed: inset 1px 1px var(--dark), inset -1px -1px var(--light), inset 2px 2px var(--shadow), inset -2px -2px var(--hi);
   --sunken: inset -1px -1px var(--light), inset 1px 1px var(--shadow), inset -2px -2px var(--hi), inset 2px 2px var(--dark);
@@ -40,7 +46,7 @@ body {
   position: relative;
 }
 .titlebar {
-  background: linear-gradient(90deg, var(--navy), #1084d0);
+  background: var(--navy);
   color: #fff;
   font-weight: bold;
   padding: 3px 5px;
@@ -53,6 +59,14 @@ body {
 html.embedded body { background: var(--face); }
 html.embedded .window { margin: 0; max-width: none; box-shadow: none; padding: 2px 4px 0; min-height: 100vh; }
 html.embedded .window > .titlebar { display: none; }
+/* In a window on another page, the toolbar, tabs and status bar stay put and only the tab page scrolls. */
+html.embedded, html.embedded body { height: 100%; overflow: hidden; }
+html.embedded .window { height: 100vh; min-height: 0; }
+html.embedded .tab-frame { display: flex; flex-direction: column; }
+html.embedded .tab-scroll { flex: 1; min-height: 0; overflow: auto; }
+/* ...and it uses the page's Windows 95 font when the page shares it (see borrowHostFont in app.js). */
+html.embedded.host-font { --font: win95, Tahoma, "MS Sans Serif", sans-serif; }
+html.embedded.host-font body { font-size: 13px; }
 
 /* Controls */
 button {
@@ -71,9 +85,8 @@ button:active:not(:disabled) { box-shadow: var(--pressed); padding: 5px 10px 3px
 button:focus-visible { outline: 1px dotted var(--dark); outline-offset: -5px; }
 button:disabled { color: var(--shadow); text-shadow: 1px 1px var(--light); cursor: default; }
 button.primary { box-shadow: 0 0 0 1px var(--dark), var(--raised); font-weight: bold; }
-button.link { box-shadow: none; background: none; padding: 0; min-height: 0; color: var(--navy); text-decoration: underline; }
 
-input[type="text"], input[type="search"], input[type="number"], select {
+input[type="text"], select {
   font: inherit;
   color: var(--text);
   background: var(--light);
@@ -89,9 +102,86 @@ select { padding-right: 2px; }
 input:focus-visible, select:focus-visible { outline: 1px dotted var(--dark); outline-offset: -4px; }
 input:disabled, select:disabled { background: var(--face); color: var(--shadow); }
 label { display: block; }
-label > select, label > input[type="text"], label > input[type="number"] { margin-top: 2px; }
+label > select, label > input[type="text"], label > .w95sel, label > .w95combo { margin-top: 2px; }
 label.check { display: inline-flex; align-items: center; gap: 5px; }
 label.check input { margin: 0; }
+
+/* Check boxes: Windows 95 style (white sunken box, black pixel check; gray inside while pressed or grayed out). */
+input[type="checkbox"] {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; margin: 0; padding: 0; border: 0; border-radius: 0; flex: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23fff' d='M2 2h9v9H2z'/%3E%3C/svg%3E") no-repeat center / 13px 13px;
+  cursor: default; outline: none; vertical-align: -2px;
+}
+input[type="checkbox"]:checked { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23fff' d='M2 2h9v9H2z'/%3E%3Cpath fill='%23000' d='M9 3h1v1H9zM8 4h2v1H8zM3 5h1v1H3zM7 5h3v1H7zM3 6h2v1H3zM6 6h3v1H6zM3 7h5v1H3zM4 8h3v1H4zM5 9h1v1H5z'/%3E%3C/svg%3E"); }
+input[type="checkbox"]:active:not(:disabled) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23c0c0c0' d='M2 2h9v9H2z'/%3E%3C/svg%3E"); }
+input[type="checkbox"]:checked:active:not(:disabled) { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23c0c0c0' d='M2 2h9v9H2z'/%3E%3Cpath fill='%23000' d='M9 3h1v1H9zM8 4h2v1H8zM3 5h1v1H3zM7 5h3v1H7zM3 6h2v1H3zM6 6h3v1H6zM3 7h5v1H3zM4 8h3v1H4zM5 9h1v1H5z'/%3E%3C/svg%3E"); }
+input[type="checkbox"]:disabled { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23c0c0c0' d='M2 2h9v9H2z'/%3E%3C/svg%3E"); }
+input[type="checkbox"]:checked:disabled { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' shape-rendering='crispEdges'%3E%3Cpath fill='%23808080' d='M0 0h12v1H1v11H0z'/%3E%3Cpath fill='%23fff' d='M12 0h1v13H0v-1h12z'/%3E%3Cpath fill='%23000' d='M1 1h10v1H2v9H1z'/%3E%3Cpath fill='%23dfdfdf' d='M11 1h1v11H1v-1h10z'/%3E%3Cpath fill='%23c0c0c0' d='M2 2h9v9H2z'/%3E%3Cpath fill='%23808080' d='M9 3h1v1H9zM8 4h2v1H8zM3 5h1v1H3zM7 5h3v1H7zM3 6h2v1H3zM6 6h3v1H6zM3 7h5v1H3zM4 8h3v1H4zM5 9h1v1H5z'/%3E%3C/svg%3E"); }
+input[type="checkbox"]:disabled + span { color: var(--shadow); text-shadow: 1px 1px var(--light); }
+/* Keyboard focus: a dotted box around the words, like Windows. */
+input[type="checkbox"]:focus-visible + span { outline: 1px dotted var(--dark); outline-offset: 1px; }
+
+/* Drop-down list boxes (js/win95-select.js draws these over the hidden <select>s). */
+.w95sel {
+  display: flex; align-items: stretch; width: 100%; min-width: 0; height: 24px; padding: 2px;
+  background: var(--light); color: var(--text); box-shadow: var(--sunken);
+  cursor: default; outline: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.w95sel-field { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; padding: 0 1px; }
+.w95sel-value { min-width: 0; max-width: 100%; padding: 0 2px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w95sel-sizer { display: none; }
+.w95sel:focus .w95sel-value { background: var(--navy); color: var(--light); outline: 1px dotted var(--light); outline-offset: -1px; }
+.w95sel-btn {
+  flex: none; width: 16px; margin-left: 1px; background: var(--face) var(--arrow-down) center / 7px 4px no-repeat;
+  box-shadow: var(--raised);
+}
+.w95sel.open .w95sel-btn, .w95combo.open .w95sel-btn { box-shadow: inset 1px 1px var(--shadow), inset -1px -1px var(--shadow); background-position: calc(50% + 1px) calc(50% + 1px); }
+.w95sel.disabled { background: var(--face); }
+.w95sel.disabled .w95sel-value { color: var(--shadow); text-shadow: 1px 1px var(--light); }
+.w95sel.disabled .w95sel-btn, .w95combo.disabled .w95sel-btn { background-image: var(--arrow-down-off); background-size: 8px 5px; }
+/* "fit" boxes are as wide as their longest choice (Confidence band, View). */
+.w95sel.fit { display: inline-flex; width: auto; }
+.w95sel.fit .w95sel-field { display: grid; }
+.w95sel.fit .w95sel-value, .w95sel.fit .w95sel-sizer { grid-area: 1 / 1; }
+.w95sel.fit .w95sel-sizer { display: grid; height: 0; overflow: hidden; visibility: hidden; }
+.w95sel.fit .w95sel-sizer > span { grid-area: 1 / 1; padding: 0 3px; white-space: nowrap; }
+/* Editable combo box (filter Value): a text box with the same drop-down button. */
+.w95combo { display: flex; align-items: stretch; height: 24px; padding: 2px; background: var(--light); box-shadow: var(--sunken); }
+.w95combo > input[type="text"] { flex: 1; min-width: 0; height: auto; padding: 1px 3px; box-shadow: none; background: transparent; margin: 0; }
+.w95combo.disabled { background: var(--face); }
+.w95combo .w95sel-btn { cursor: default; }
+/* The open list (drawn into <body>, so a scrolling panel never cuts it off). */
+.w95sel-list {
+  position: fixed; z-index: 100; background: var(--light); color: var(--text); border: 1px solid var(--dark);
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  font: inherit; cursor: default; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.w95sel-item { height: 18px; line-height: 18px; padding: 0 4px 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.w95sel-item.on { background: var(--navy); color: var(--light); }
+.w95sel-item.off { color: var(--shadow); }
+
+/* Scroll bars: Windows 95 style, like the rest of the site (Chrome, Edge, Safari). */
+::-webkit-scrollbar { width: 19px; height: 19px; }
+::-webkit-scrollbar-track { background-color: #e0e0e0; }
+::-webkit-scrollbar-thumb { background-color: #bdbdbd; border: 2px solid var(--light); border-right-color: #676363; border-bottom-color: #676363; }
+::-webkit-scrollbar-corner { background-color: var(--face); }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-button:vertical:start:decrement, ::-webkit-scrollbar-button:vertical:end:increment,
+::-webkit-scrollbar-button:horizontal:start:decrement, ::-webkit-scrollbar-button:horizontal:end:increment {
+  display: block; width: 19px; height: 19px;
+  background: var(--face) no-repeat center; border: 2px solid var(--light); border-right-color: #676363; border-bottom-color: #676363;
+  outline: 1px solid #9f9d9d; outline-offset: -1px;
+}
+::-webkit-scrollbar-button:vertical:start:decrement { background-image: var(--arrow-up); background-size: 7px 4px; }
+::-webkit-scrollbar-button:vertical:end:increment { background-image: var(--arrow-down); background-size: 7px 4px; }
+::-webkit-scrollbar-button:horizontal:start:decrement { background-image: var(--arrow-left); background-size: 4px 7px; }
+::-webkit-scrollbar-button:horizontal:end:increment { background-image: var(--arrow-right); background-size: 4px 7px; }
+::-webkit-scrollbar-button:active { border-color: #676363; background-position: calc(50% + 1px) calc(50% + 1px); }
+/* Firefox can't draw the arrow buttons, so it gets the Win95 colors. */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-color: #c0c0c0 #e0e0e0; }
+}
 
 fieldset {
   border: 1px solid var(--shadow);
@@ -122,7 +212,8 @@ legend { padding: 0 3px; }
 .tabs [role="tab"][aria-selected="true"] { margin-top: 0; padding: 5px 16px 6px; margin-bottom: -2px; background: var(--face); font-weight: bold; }
 .tabs [role="tab"]:active { padding: 4px 14px 3px; }
 .tabs [role="tab"][aria-selected="true"]:active { padding: 5px 16px 6px; }
-.tab-frame { box-shadow: var(--raised); padding: 10px; flex: 1; min-height: 0; }
+.tab-frame { box-shadow: var(--raised); padding: 2px; flex: 1; min-height: 0; }
+.tab-scroll { padding: 8px; }
 .statusbar { display: flex; gap: 3px; padding: 4px 0 3px; }
 .status-cell { box-shadow: inset -1px -1px var(--light), inset 1px 1px var(--shadow); padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-cell.grow { flex: 1; min-width: 0; }
@@ -240,7 +331,15 @@ tr.total td { border-top: 1px solid var(--shadow); font-weight: bold; }
 @media (max-width: 520px) {
   body { font-size: 13px; }
   .window { margin: 0; min-height: 100vh; }
-  .tab-frame { padding: 7px; }
+  .tab-scroll { padding: 5px; }
+  /* Everything you can tap is at least 32 px tall. */
+  button, .btn-row.tight button, .tabs [role="tab"] { min-height: 32px; }
+  input[type="text"], .w95sel, .w95combo { height: 32px; }
+  .w95sel-btn { width: 22px; }
+  .w95sel-item { height: 32px; line-height: 32px; }
+  label.check, .listbox label { min-height: 32px; }
+  .rule button { min-height: 32px; min-width: 32px; }
+  tr.click td { padding-top: 8px; padding-bottom: 8px; }
   .analyze-controls, .form-grid { grid-template-columns: 1fr; }
   .stat-strip { grid-template-columns: 1fr 1fr; }
   .tabs [role="tab"] { padding: 4px 9px 3px; }

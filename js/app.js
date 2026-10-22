@@ -12,6 +12,7 @@
   const MAX_RANK_COLUMNS = 80;
   const SAMPLE_NAME = 'utah-housing-sample.csv';
   const { isMissing, toNumber, parseDate, csvCell, detectFileStyle, decodeBytes } = Parse;
+  const { fmt, isYear, yearColumn, groupColumns, colorColumns, customSampleSize } = Helpers;
   const fileStyle = Parse.style;
   const ID_NAME = /(^|[_\s.-])(id|uuid|guid|objectid|fid)([_\s.-]|$)/i;
   const DATE_NAME = /(date|time|created|updated|posted|period|day)/i;
@@ -19,14 +20,8 @@
   const TYPE_LABEL = { numeric: 'number', category: 'category', date: 'date', text: 'text', identifier: 'ID', sparse: 'mostly blank' };
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  function fmt(v) {
-    if (v === null || v === undefined || !Number.isFinite(v)) return '—';
-    const a = Math.abs(v);
-    if (a !== 0 && (a < 1e-6 || a >= 1e15)) return v.toExponential(3);
-    if (a !== 0 && a < 1) return v.toLocaleString('en-US', { maximumSignificantDigits: 4 });
-    const digits = a >= 100000 ? 0 : a >= 1000 ? 2 : a >= 10 ? 3 : 4;
-    return v.toLocaleString('en-US', { maximumFractionDigits: digits });
-  }
+  // A value from column `col`: years (like APX_BLT_YR) print without a thousands comma.
+  const fmtCol = (v, col) => fmt(v, !!(state.profiles[col] && state.profiles[col].yearLike));
   const fmtZ = (z) => (Number.isFinite(z) ? z.toFixed(2) : z > 0 ? 'very high' : 'very low');
   const fmtInt = (v) => (Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '—');
   const fmtP = (p) => (!Number.isFinite(p) ? '—' : p < 0.0001 ? '< 0.0001' : p.toFixed(4));
@@ -268,7 +263,7 @@
   function profileColumns(rows, columns) {
     const out = Object.create(null);
     for (const col of columns) {
-      let missing = 0, nonMissing = 0, numeric = 0, dateChecked = 0, dateHits = 0, totalLen = 0, capped = false;
+      let missing = 0, nonMissing = 0, numeric = 0, years = 0, dateChecked = 0, dateHits = 0, totalLen = 0, capped = false;
       const uniq = new Set();
       for (const r of rows) {
         const v = r[col];
@@ -276,7 +271,8 @@
         nonMissing++;
         totalLen += v.length;
         if (!capped) { uniq.add(v); if (uniq.size > 5000) capped = true; }
-        if (Number.isFinite(toNumber(v))) numeric++;
+        const n = toNumber(v);
+        if (Number.isFinite(n)) { numeric++; if (isYear(n)) years++; }
         if (dateChecked < 500) { dateChecked++; if (parseDate(v)) dateHits++; }
       }
       const missingRate = rows.length ? missing / rows.length : 0;
@@ -293,7 +289,8 @@
       else if (!capped && uniq.size <= Math.max(20, Math.min(100, nonMissing * 0.25))) type = 'category';
       else if (uniqueRatio > 0.94 && nonMissing > 30 && avgLen < 60) type = 'identifier';
       else type = 'text';
-      out[col] = { type, missing, nonMissing, missingRate, numericRatio, uniqueCount: uniq.size, capped, avgLen };
+      const yearLike = type === 'numeric' && yearColumn(col, numeric, years);
+      out[col] = { type, missing, nonMissing, missingRate, numericRatio, uniqueCount: uniq.size, capped, avgLen, yearLike };
     }
     return out;
   }
@@ -335,8 +332,8 @@
     return `${f.col} ${opLabel(f.op)} "${f.v1}"`;
   }
   function describeRange(r) {
-    const lo = Number.isFinite(r.min) ? fmt(r.min) : 'no minimum';
-    const hi = Number.isFinite(r.max) ? fmt(r.max) : 'no maximum';
+    const lo = Number.isFinite(r.min) ? fmtCol(r.min, r.col) : 'no minimum';
+    const hi = Number.isFinite(r.max) ? fmtCol(r.max, r.col) : 'no maximum';
     return `${r.col}: keep ${r.mode === 'inside' ? 'inside' : 'outside'} ${lo} to ${hi}`;
   }
 
@@ -408,7 +405,7 @@
   function sampleSize() {
     const s = state.clean.sample;
     if (s.mode === 'all') return 0;
-    const n = s.mode === 'custom' ? Math.floor(toNumber(s.custom)) : Number(s.mode);
+    const n = s.mode === 'custom' ? customSampleSize(s.custom).n : Number(s.mode);
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
@@ -471,11 +468,11 @@
         });
         columns = [...columns, flagCol];
         state.profiles[flagCol] = { type: 'category', missing: 0, missingRate: 0, uniqueCount: 3, avgLen: 5 };
-        step('Flag unusual values', rows.length, rows.length, `${plural(count, 'row')} flagged TRUE in new column ${flagCol} (${o.col} outside ${fmt(b.lower)} to ${fmt(b.upper)}, ${b.how})`);
+        step('Flag unusual values', rows.length, rows.length, `${plural(count, 'row')} flagged TRUE in new column ${flagCol} (${o.col} outside ${fmtCol(b.lower, o.col)} to ${fmtCol(b.upper, o.col)}, ${b.how})`);
       } else {
         const before = rows.length;
         rows = rows.filter((r) => { const n = toNumber(r[o.col]); return !Number.isFinite(n) || (n >= b.lower && n <= b.upper); });
-        step('Remove unusual values', before, rows.length, `${o.col} outside ${fmt(b.lower)} to ${fmt(b.upper)} (${b.how}). Rows with a blank ${o.col} are kept.`);
+        step('Remove unusual values', before, rows.length, `${o.col} outside ${fmtCol(b.lower, o.col)} to ${fmtCol(b.upper, o.col)} (${b.how}). Rows with a blank ${o.col} are kept.`);
       }
     }
 
@@ -485,7 +482,7 @@
       rows = seededSample(rows, size, C.sample.seed);
       step('Random sample', before, rows.length, `Kept a random ${fmtInt(size)} rows (sample #${C.sample.seed})`);
     } else if (C.sample.mode === 'custom' && !size) {
-      warnings.push({ strong: false, text: 'Type a custom sample size, or pick "All rows".' });
+      warnings.push({ strong: false, text: customSampleSize(C.sample.custom).error || 'Type a custom sample size, or pick "All rows".' });
     }
 
     if (!columns.length) warnings.push({ strong: true, text: 'No columns are selected. Pick at least one in "Columns to keep".' });
@@ -502,6 +499,7 @@
   const scheduleClean = debounce(() => runClean(true), 120);
 
   // ---------------------------------------------------------------- clean: rendering
+  let filterValues = []; // common values of the filter column, listed under the Value box
   function populateCleanSelectors() {
     const cols = state.raw.columns;
     const numeric = cols.filter((c) => typeOf(c) === 'numeric');
@@ -526,7 +524,7 @@
       if (counts.size > 3000) break;
     }
     const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60);
-    $('fValues').innerHTML = top.map(([v]) => `<option value="${esc(v)}"></option>`).join('');
+    filterValues = top.map(([v]) => v);
   }
   function updateFilterInputs() {
     const op = $('fOp').value;
@@ -684,19 +682,22 @@
   function populateAnalyzeSelectors() {
     const A = state.analyze;
     const numeric = numericOutColumns();
-    const others = state.out.columns.filter((c) => typeOf(c) !== 'identifier' && typeOf(c) !== 'sparse');
+    // Groups only make sense for columns with a handful of values (CITY, BLT_DECADE), not ACRES with 820.
+    // Colors can also shade the dots by any number column.
+    const groupable = groupColumns(state.out.columns, state.profiles);
+    const colorable = colorColumns(state.out.columns, state.profiles);
     const before = [A.y, A.x];
     if (!numeric.includes(A.y)) A.y = numeric[0] || '';
     if (!numeric.includes(A.x) || (A.x === A.y && numeric.length > 1)) A.x = numeric.find((c) => c !== A.y) || numeric[0] || '';
     const gone = before.filter((c, i) => c && c !== [A.y, A.x][i] && !numeric.includes(c));
     if (gone.length) setStatus(`${gone.join(' and ')} ${gone.length === 1 ? 'is' : 'are'} no longer in the cleaned data, so Analyze switched to ${A.y}${A.x !== A.y ? ` vs ${A.x}` : ''}.`);
-    if (A.color && !others.includes(A.color)) A.color = '';
-    if (A.group && !others.includes(A.group)) A.group = '';
+    if (A.color && !colorable.includes(A.color)) A.color = '';
+    if (A.group && !groupable.includes(A.group)) A.group = '';
     const opts = (list, none) => (none ? `<option value="">${none}</option>` : '') + list.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
     $('ySel').innerHTML = numeric.length ? opts(numeric) : '<option value="">(no number columns)</option>';
     $('xSel').innerHTML = numeric.length ? opts(numeric) : '<option value="">(no number columns)</option>';
-    $('colorSel').innerHTML = opts(others, '(none)');
-    $('groupSel').innerHTML = opts(others, '(none)');
+    $('colorSel').innerHTML = opts(colorable, '(none)');
+    $('groupSel').innerHTML = opts(groupable, '(none)');
     $('ySel').value = A.y; $('xSel').value = A.x; $('colorSel').value = A.color; $('groupSel').value = A.group;
   }
 
@@ -856,7 +857,7 @@
     note.textContent = text;
     if (!flagged.length) { box.innerHTML = ''; return; }
     const show = flagged.slice(0, 100);
-    box.innerHTML = `<table><thead><tr><th class="num">Row</th><th class="num">${esc(M.x)}</th><th class="num">${esc(M.y)}</th><th class="num" title="What the trend line predicts for this row">Expected</th><th class="num" title="Actual minus expected">Difference</th><th class="num" title="How unusual the row is, in standard errors">Std. resid.</th></tr></thead><tbody>${show.map((p) => `<tr class="click" data-row="${p.row[ROW]}" title="Highlight on the chart"><td class="num">${p.row[ROW]}</td><td class="num">${fmt(p.x)}</td><td class="num">${fmt(p.y)}</td><td class="num">${fmt(p.pred)}</td><td class="num">${fmt(p.resid)}</td><td class="num">${fmtZ(p.z)}</td></tr>`).join('')}</tbody></table>${flagged.length > 100 ? `<div class="table-note">Showing the 100 most unusual. Download to see all ${fmtInt(flagged.length)}.</div>` : ''}`;
+    box.innerHTML = `<table><thead><tr><th class="num">Row</th><th class="num">${esc(M.x)}</th><th class="num">${esc(M.y)}</th><th class="num" title="What the trend line predicts for this row">Expected</th><th class="num" title="Actual minus expected">Difference</th><th class="num" title="How unusual the row is, in standard errors">Std. resid.</th></tr></thead><tbody>${show.map((p) => `<tr class="click" data-row="${p.row[ROW]}" title="Highlight on the chart"><td class="num">${p.row[ROW]}</td><td class="num">${fmtCol(p.x, M.x)}</td><td class="num">${fmtCol(p.y, M.y)}</td><td class="num">${fmtCol(p.pred, M.y)}</td><td class="num">${fmt(p.resid)}</td><td class="num">${fmtZ(p.z)}</td></tr>`).join('')}</tbody></table>${flagged.length > 100 ? `<div class="table-note">Showing the 100 most unusual. Download to see all ${fmtInt(flagged.length)}.</div>` : ''}`;
   }
 
   function renderRanking() {
@@ -892,11 +893,11 @@
     const shown = list.slice(0, 50);
     const body = shown.map(([g, s]) => {
       const m = s.xs.length >= 3 ? Stats.correlate(s.xs, s.ys) : { error: true };
-      return `<tr><td class="cut" title="${esc(g)}">${esc(g)}</td><td class="num">${fmtInt(s.rows)}</td><td class="num">${fmt(mean(s.ys))}</td><td class="num">${fmt(mean(s.xs))}</td><td class="num">${m.error ? '—' : m.r.toFixed(3)}</td></tr>`;
+      return `<tr><td class="cut" title="${esc(g)}">${esc(g)}</td><td class="num">${fmtInt(s.rows)}</td><td class="num">${fmtCol(mean(s.ys), A.y)}</td><td class="num">${fmtCol(mean(s.xs), A.x)}</td><td class="num">${m.error ? '—' : m.r.toFixed(3)}</td></tr>`;
     }).join('');
     let sumX = 0, sumY = 0, nAll = 0;
     for (const [, g] of list) { for (let i = 0; i < g.xs.length; i++) { sumX += g.xs[i]; sumY += g.ys[i]; } nAll += g.xs.length; }
-    const total = `<tr class="total"><td>All rows</td><td class="num">${fmtInt(state.out.rows.length)}</td><td class="num">${fmt(nAll ? sumY / nAll : NaN)}</td><td class="num">${fmt(nAll ? sumX / nAll : NaN)}</td><td class="num">${state.model.model && !state.model.model.error ? state.model.model.r.toFixed(3) : '—'}</td></tr>`;
+    const total = `<tr class="total"><td>All rows</td><td class="num">${fmtInt(state.out.rows.length)}</td><td class="num">${fmtCol(nAll ? sumY / nAll : NaN, A.y)}</td><td class="num">${fmtCol(nAll ? sumX / nAll : NaN, A.x)}</td><td class="num">${state.model.model && !state.model.model.error ? state.model.model.r.toFixed(3) : '—'}</td></tr>`;
     box.innerHTML = `<table><thead><tr><th>${esc(A.group)}</th><th class="num">Rows</th><th class="num">Avg ${esc(A.y)}</th><th class="num">Avg ${esc(A.x)}</th><th class="num">r</th></tr></thead><tbody>${body}${total}</tbody></table>${list.length > 50 ? `<div class="table-note">Showing the 50 largest of ${fmtInt(list.length)} groups.</div>` : ''}`;
   }
 
@@ -1097,8 +1098,8 @@
         const grad = svg.select('defs').append('linearGradient').attr('id', gid);
         d3.range(0, 11).forEach((i) => grad.append('stop').attr('offset', `${i * 10}%`).attr('stop-color', color.scale(color.domain[0] + (color.domain[1] - color.domain[0]) * i / 10)));
         lg.append('rect').attr('y', 16).attr('width', 200).attr('height', 12).attr('fill', `url(#${gid})`).attr('stroke', '#808080');
-        lg.append('text').attr('y', 40).attr('font-size', 11).text(fmt(color.domain[0]));
-        lg.append('text').attr('x', 200).attr('y', 40).attr('text-anchor', 'end').attr('font-size', 11).text(fmt(color.domain[1]));
+        lg.append('text').attr('y', 40).attr('font-size', 11).text(fmtCol(color.domain[0], color.col));
+        lg.append('text').attr('x', 200).attr('y', 40).attr('text-anchor', 'end').attr('font-size', 11).text(fmtCol(color.domain[1], color.col));
       } else {
         const items = lg.append('g').attr('transform', 'translate(0,20)').selectAll('g').data(legend.items).join('g').attr('transform', (d) => `translate(${d.x},${d.y})`);
         items.append('circle').attr('cx', 6).attr('cy', 6).attr('r', 5).attr('fill', (d) => d.color).attr('stroke', (d) => d.stroke || '#fff');
@@ -1118,9 +1119,9 @@
 
   function showTip(ev, p) {
     const M = state.model, tip = $('tip');
-    const lines = [[`Row ${p.row[ROW]}`, true], [`${M.y}: ${fmt(p.y)}`], [`${M.x}: ${fmt(p.x)}`]];
+    const lines = [[`Row ${p.row[ROW]}`, true], [`${M.y}: ${fmtCol(p.y, M.y)}`], [`${M.x}: ${fmtCol(p.x, M.x)}`]];
     if (state.analyze.color) lines.push([`${state.analyze.color}: ${isMissing(p.row[state.analyze.color]) ? '(blank)' : p.row[state.analyze.color]}`]);
-    if (Number.isFinite(p.pred)) { lines.push([`Expected ${M.y}: ${fmt(p.pred)}`]); lines.push([`Std. residual: ${fmtZ(p.z)}`]); }
+    if (Number.isFinite(p.pred)) { lines.push([`Expected ${M.y}: ${fmtCol(p.pred, M.y)}`]); lines.push([`Std. residual: ${fmtZ(p.z)}`]); }
     tip.replaceChildren(...lines.map(([t, bold]) => { const d = document.createElement('div'); d.textContent = t; if (bold) d.style.fontWeight = 'bold'; return d; }));
     tip.hidden = false;
     moveTip(ev);
@@ -1201,7 +1202,10 @@
   }
 
   // ---------------------------------------------------------------- tabs
+  const tabScroll = {};
   function showTab(name) {
+    const scroller = document.querySelector('.tab-scroll');
+    if (state.tab) tabScroll[state.tab] = scroller.scrollTop;
     state.tab = name;
     document.querySelectorAll('[role="tab"]').forEach((t) => {
       const on = t.dataset.tab === name;
@@ -1212,6 +1216,7 @@
     if (name === 'analyze' && state.raw.rows.length) {
       if (state.analyzeDirty) runAnalysis(); else drawChart();
     }
+    scroller.scrollTop = tabScroll[name] || 0;
   }
 
   // ---------------------------------------------------------------- events
@@ -1326,7 +1331,14 @@
       if (!$('sCustom').disabled) $('sCustom').focus();
       scheduleClean();
     });
-    $('sCustom').addEventListener('input', () => { C().sample.custom = $('sCustom').value; scheduleClean(); });
+    const SAMPLE_HELP = customSampleSize('0').error;
+    $('sCustom').addEventListener('input', () => {
+      C().sample.custom = $('sCustom').value;
+      const { error } = customSampleSize(C().sample.custom);
+      if (error) setStatus(error, true);
+      else if ($('statusMain').textContent === SAMPLE_HELP) setStatus('Ready');
+      scheduleClean();
+    });
     $('sReshuffle').addEventListener('click', () => {
       C().sample.seed++;
       if (C().sample.mode === 'all') setStatus('Pick how many rows to keep first.');
@@ -1383,6 +1395,34 @@
       if (w !== lastW) { lastW = w; redraw(); }
     }).observe($('chartBox'));
   }
+
+  // Windows 95 drop-down lists instead of the browser's own (the <select>s stay, hidden, as the source of truth).
+  Win95Select.enhanceAll();
+  Win95Select.combo($('fVal'), () => filterValues);
+
+  // Inside a window on Jordan's Windows 95 site, use the site's own Windows 95 font (it's already loaded there).
+  // Only works when the page around it is on the same site and declares a "win95" font; otherwise nothing changes.
+  function borrowHostFont() {
+    if (!document.documentElement.classList.contains('embedded')) return;
+    let src = '';
+    try {
+      for (const sheet of window.parent.document.styleSheets) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (e) { continue; }
+        for (const r of rules) {
+          if (!/^@font-face/i.test(r.cssText) || !/^["']?win95["']?$/i.test(r.style.getPropertyValue('font-family').trim())) continue;
+          const m = /url\(\s*(["']?)([^"')]+)\1\s*\)/.exec(r.style.getPropertyValue('src'));
+          if (m) { src = new URL(m[2], sheet.href || window.parent.location.href).href; break; }
+        }
+        if (src) break;
+      }
+    } catch (e) { return; } // a page on another site
+    if (!src || !window.FontFace) return;
+    new FontFace('win95', `url("${src}")`).load()
+      .then((face) => { document.fonts.add(face); document.documentElement.classList.add('host-font'); })
+      .catch(() => {});
+  }
+  borrowHostFont();
 
   wire();
   // ?sample in the address opens the sample right away (handy for demos and links).
